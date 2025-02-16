@@ -7,12 +7,7 @@ RUN apt update && apt install -y \
  && pip install --upgrade build \
  && pip install tinydb
 
-COPY . /shadowsocks
-WORKDIR /shadowsocks
-RUN python3 -m build \
-    && pip install dist/shadowsocks-3.0.0-py3-none-any.whl
-
-# ENTRYPOINT ["/usr/local/bin/ssserver"]
+# ENTRYPOINT ["bash /shadowsocks/develop/startup.sh"]
 
 # usage:
 # docker run -d --restart=always -p 1314:1314 ficapy/shadowsocks -s 0.0.0.0 -p 1314 -k $PD -m chacha20
