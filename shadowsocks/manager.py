@@ -28,10 +28,12 @@ import json
 import collections
 
 from shadowsocks import common, eventloop, tcprelay, udprelay, asyncdns, shell
+from tinydb import TinyDB, Query
 
 
 BUF_SIZE = 1506
 STAT_SEND_LIMIT = 50
+DB_PATH = "/shadowsocks/db.json"
 
 
 class Manager(object):
@@ -76,13 +78,13 @@ class Manager(object):
                        eventloop.POLL_IN, self)
         self._loop.add_periodic(self.handle_periodic)
 
-        port_password = config['port_password']
-        del config['port_password']
         config['crypto_path'] = config.get('crypto_path', dict())
-        for port, password in port_password.items():
+
+        db = TinyDB(DB_PATH)
+        for user in db:
             a_config = config.copy()
-            a_config['server_port'] = int(port)
-            a_config['password'] = password
+            a_config['server_port'] = int(user['server_port'])
+            a_config['password'] = user['password']
             self.add_port(a_config)
 
     def cleanup(self):
@@ -96,9 +98,9 @@ class Manager(object):
         port = int(config['server_port'])
         servers = self._relays.get(port, None)
         if servers:
-            logging.error("server already exists at %s:%d" % (config['server'],
-                                                              port))
-            return
+            error_str = "server already exists at %s:%d" % (config['server'], port)
+            logging.error(error_str)
+            return error_str
         logging.info("adding server at %s:%d" % (config['server'], port))
         t = tcprelay.TCPRelay(config, self._dns_resolver, False,
                               self.stat_callback)
@@ -107,6 +109,13 @@ class Manager(object):
         t.add_to_loop(self._loop)
         u.add_to_loop(self._loop)
         self._relays[port] = (t, u)
+
+        db = TinyDB(DB_PATH)
+        User = Query()
+        if not db.contains(User['server_port'] == port):
+            db.insert({'server_port': port, 'password': str(config['password'])})
+
+        return "OK"
 
     def remove_port(self, config):
         port = int(config['server_port'])
@@ -117,9 +126,11 @@ class Manager(object):
             t.close(next_tick=False)
             u.close(next_tick=False)
             del self._relays[port]
+            return "OK"
         else:
-            logging.error("server not exist at %s:%d" % (config['server'],
-                                                         port))
+            error_str = "server not exist at %s:%d" % (config['server'], port)
+            logging.error(error_str)
+            return error_str
 
     def handle_event(self, sock, fd, event):
         if sock == self._control_socket and event == eventloop.POLL_IN:
@@ -135,13 +146,15 @@ class Manager(object):
                     logging.error('can not find server_port in config')
                 else:
                     if command == 'add':
-                        self.add_port(a_config)
-                        self._send_control_data(b'ok')
+                        result = self.add_port(a_config)
+                        self._send_control_data(result.encode())
                     elif command == 'remove':
-                        self.remove_port(a_config)
-                        self._send_control_data(b'ok')
+                        result = self.remove_port(a_config)
+                        self._send_control_data(result.encode())
                     elif command == 'ping':
                         self._send_control_data(b'pong')
+                    elif command == 'stat':
+                        self.handle_periodic()
                     else:
                         logging.error('unknown command %s', command)
 
